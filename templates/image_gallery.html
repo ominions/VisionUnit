@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Image Gallery</title>
+</head>
+<body>
+    <h1>Image Gallery</h1>
+    <div>
+        {% for image in images %}
+            <img src="{{ url_for('images', filename=image) }}" alt="ESP32 Image" style="width: 200px; height: auto;">
+        {% endfor %}
+    </div>
+</body>
+</html>
