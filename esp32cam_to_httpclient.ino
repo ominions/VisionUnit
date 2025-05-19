@@ -1,21 +1,12 @@
 
-#include "esp_camera.h"
-#include "esp_timer.h"
-#include "Arduino.h"
-// #include "FS.h"                // SD Card ESP32
-// #include "SD_MMC.h"            // SD Card ESP32
-#include "soc/soc.h"           // Disable brownour problems
-#include "soc/rtc_cntl_reg.h"  // Disable brownour problems
-#include "driver/rtc_io.h"
-#include <EEPROM.h>  // read and write from flash memory
-#include <HTTPClient.h>
-#include <SPIFFS.h>
 #include <WiFi.h>
+#include "soc/soc.h"
+#include "soc/rtc_cntl_reg.h"
+#include "esp_camera.h"
+#include <WiFiClientSecure.h>
+//========================================
 
-// define the number of bytes you want to access
-// #define EEPROM_SIZE 1
-
-// Pin definition for CAMERA_MODEL_AI_THINKER
+//======================================== CAMERA_MODEL_AI_THINKER GPIO.
 #define PWDN_GPIO_NUM 32
 #define RESET_GPIO_NUM -1
 #define XCLK_GPIO_NUM 0
@@ -33,33 +24,210 @@
 #define VSYNC_GPIO_NUM 25
 #define HREF_GPIO_NUM 23
 #define PCLK_GPIO_NUM 22
+//========================================
 
-// int pictureNumber = 0;
+// LED Flash PIN (GPIO 4)
+#define FLASH_LED_PIN 4
 
-const char* ssid = "ashwin00_fpkhr_2.4";
-const char* password = "kamehamehaah@789";
-const char* post_url = "https://dev.giriamrit.com.np/api/upload/";  // Location where images are POSTED
-bool internet_connected = false;
+//======================================== Insert your network credentials.
+const char* ssid = "SSID";
+const char* password = "PASSWORD";
+//========================================
 
-#include <ArduinoOTA.h>
-#include <ESPmDNS.h>
-#include <WiFiUdp.h>
+//======================================== Variables for Timer/Millis.
+unsigned long previousMillis = 0;
+const int Interval = 20000;  //--> Photo capture every 20 seconds.
+//========================================
 
-void setup() {
-  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);  //disable brownout detector
+// Server Address or Server IP.
+String serverName = "IP-ADRESS";  //--> Change with your server computer's IP address or your Domain name.
+// The file path "upload_img.php" on the server folder.
+String serverPath = "/api/upload/";
+// Server Port.
+const int serverPort = 443;
 
-  Serial.begin(115200);
-  //Serial.setDebugOutput(true);
-  //Serial.println();
+// Variable to set capture photo with LED Flash.
+// Set to "false", then the Flash LED will not light up when capturing a photo.
+// Set to "true", then the Flash LED lights up when capturing a photo.
+bool LED_Flash_ON = true;
+
+// Initialize WiFiClient.
+WiFiClientSecure client;
 
 
-  if (!SPIFFS.begin(true)) {
-    Serial.println("SPIFFS Mount failed.");
+//________________________________________________________________________________ sendPhotoToServer()
+void sendPhotoToServer() {
+  client.setInsecure();
+  String AllData;
+  String DataBody;
+
+  Serial.println();
+  Serial.println("-----------");
+
+  //---------------------------------------- Pre capture for accurate timing.
+  Serial.println("Taking a photo...");
+
+  if (LED_Flash_ON == true) {
+    digitalWrite(FLASH_LED_PIN, HIGH);
+    delay(1000);
+  }
+
+  for (int i = 0; i <= 3; i++) {
+    camera_fb_t *fb = NULL;
+    fb = esp_camera_fb_get();
+    if (!fb) {
+      Serial.println("Camera capture failed");
+      Serial.println("Restarting the ESP32 CAM.");
+      delay(1000);
+      ESP.restart();
+      return;
+    }
+    
+
+    esp_camera_fb_return(fb);
+    delay(200);
+  }
+
+  camera_fb_t *fb = NULL;
+  fb = esp_camera_fb_get();
+  if (!fb) {
+    Serial.println("Camera capture failed");
+    Serial.println("Restarting the ESP32 CAM.");
+    delay(1000);
+    ESP.restart();
     return;
   }
 
-  // initialize EEPROM with predefined size
+  if (LED_Flash_ON == true) digitalWrite(FLASH_LED_PIN, LOW);
 
+  Serial.println("Taking a photo was successful.");
+  //----------------------------------------
+
+  Serial.println("Connecting to server: " + serverName);
+
+  if (client.connect(serverName.c_str(), serverPort)) {
+    client.setInsecure();
+    String timestamp = String(millis());
+    Serial.println("Connection successful!");
+
+    String post_data = "--dataMarker\r\nContent-Disposition: form-data; name=\"uploaded_images\"; filename=\"image_" + timestamp + ".jpg\"\r\nContent-Type: image/jpeg\r\n\r\n";
+
+    String head = post_data;
+    String boundary = "\r\n--dataMarker--\r\n";
+
+    uint32_t imageLen = fb->len;
+    uint32_t dataLen = head.length() + boundary.length();
+    uint32_t totalLen = imageLen + dataLen;
+
+    client.println("POST " + serverPath + " HTTP/1.1");
+    client.println("Host: " + serverName);
+    client.println("Content-Length: " + String(totalLen));
+    client.println("Content-Type: multipart/form-data; boundary=dataMarker");
+    client.println();
+    client.print(head);
+
+    uint8_t *fbBuf = fb->buf;
+    size_t fbLen = fb->len;
+    for (size_t n = 0; n < fbLen; n = n + 1024) {
+      if (n + 1024 < fbLen) {
+        client.write(fbBuf, 1024);
+        fbBuf += 1024;
+      } else if (fbLen % 1024 > 0) {
+        size_t remainder = fbLen % 1024;
+        client.write(fbBuf, remainder);
+      }
+    }
+    client.print(boundary);
+
+    esp_camera_fb_return(fb);
+
+    int timoutTimer = 10000;
+    long startTimer = millis();
+    boolean state = false;
+    Serial.println("Response : ");
+    while ((startTimer + timoutTimer) > millis()) {
+      Serial.print(".");
+      delay(200);
+
+      // Skip HTTP headers
+      while (client.available()) {
+        char c = client.read();
+        if (c == '\n') {
+          if (AllData.length() == 0) { state = true; }
+          AllData = "";
+        } else if (c != '\r') {
+          AllData += String(c);
+        }
+        if (state == true) { DataBody += String(c); }
+        startTimer = millis();
+      }
+      if (DataBody.length() > 0) { break; }
+    }
+    client.stop();
+    Serial.println(DataBody);
+    Serial.println("-----------");
+    Serial.println();
+
+  } else {
+    client.stop();
+    DataBody = "Connection to " + serverName + " failed.";
+    Serial.println(DataBody);
+    Serial.println("-----------");
+  }
+}
+//________________________________________________________________________________
+
+//________________________________________________________________________________ VOID SETUP()
+void setup() {
+  // put your setup code here, to run once:
+
+  // Disable brownout detector.
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+
+  Serial.begin(115200);
+  Serial.println();
+
+  pinMode(FLASH_LED_PIN, OUTPUT);
+
+  // Setting the ESP32 WiFi to station mode.
+  WiFi.mode(WIFI_STA);
+  Serial.println();
+
+  //---------------------------------------- The process of connecting ESP32 CAM with WiFi Hotspot / WiFi Router.
+  Serial.println();
+  Serial.print("Connecting to : ");
+  Serial.println(ssid);
+  WiFi.begin(ssid, password);
+
+  // The process timeout of connecting ESP32 CAM with WiFi Hotspot / WiFi Router is 20 seconds.
+  // If within 20 seconds the ESP32 CAM has not been successfully connected to WiFi, the ESP32 CAM will restart.
+  // I made this condition because on my ESP32-CAM, there are times when it seems like it can't connect to WiFi, so it needs to be restarted to be able to connect to WiFi.
+  int connecting_process_timed_out = 20;  //--> 20 = 20 seconds.
+  connecting_process_timed_out = connecting_process_timed_out * 2;
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print(".");
+    delay(500);
+    if (connecting_process_timed_out > 0) connecting_process_timed_out--;
+    if (connecting_process_timed_out == 0) {
+      Serial.println();
+      Serial.print("Failed to connect to ");
+      Serial.println(ssid);
+      Serial.println("Restarting the ESP32 CAM.");
+      delay(1000);
+      ESP.restart();
+    }
+  }
+
+  Serial.println();
+  Serial.print("Successfully connected to ");
+  Serial.println(ssid);
+  //Serial.print("ESP32-CAM IP Address: ");
+  //Serial.println(WiFi.localIP());
+  //----------------------------------------
+
+  //---------------------------------------- Set the camera ESP32 CAM.
+  Serial.println();
+  Serial.print("Set the camera ESP32 CAM...");
 
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
@@ -83,133 +251,63 @@ void setup() {
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
 
+  // init with high specs to pre-allocate larger buffers
   if (psramFound()) {
-    config.frame_size = FRAMESIZE_QVGA;  // FRAMESIZE_ + QVGA|CIF|VGA|SVGA|XGA|SXGA|UXGA
-    config.jpeg_quality = 10;
+    config.frame_size = FRAMESIZE_UXGA;
+    config.jpeg_quality = 10;  //--> 0-63 lower number means higher quality
     config.fb_count = 2;
   } else {
     config.frame_size = FRAMESIZE_SVGA;
-    config.jpeg_quality = 12;
+    config.jpeg_quality = 8;  //--> 0-63 lower number means higher quality
     config.fb_count = 1;
   }
 
-  // Init Camera
-  if (esp_camera_init(&config) != ESP_OK) {
-    Serial.println("Camera init failed");
-    return;
+  // camera init
+  esp_err_t err = esp_camera_init(&config);
+  if (err != ESP_OK) {
+    Serial.printf("Camera init failed with error 0x%x", err);
+    Serial.println();
+    Serial.println("Restarting the ESP32 CAM.");
+    delay(1000);
+    ESP.restart();
   }
 
-  //Serial.println("Starting SD Card");
-  // if (!SD_MMC.begin())
-  // {
-  //   Serial.println("SD Card Mount Failed");
-  //   return;
-  // }
+  sensor_t *s = esp_camera_sensor_get();
 
-  // uint8_t cardType = SD_MMC.cardType();
-  // if (cardType == CARD_NONE)
-  // {
-  //   Serial.println("No SD Card attached");
-  //   return;
-  // }
+  // Selectable camera resolution details :
+  // -UXGA   = 1600 x 1200 pixels
+  // -SXGA   = 1280 x 1024 pixels
+  // -XGA    = 1024 x 768  pixels
+  // -SVGA   = 800 x 600   pixels
+  // -VGA    = 640 x 480   pixels
+  // -CIF    = 352 x 288   pixels
+  // -QVGA   = 320 x 240   pixels
+  // -HQVGA  = 240 x 160   pixels
+  // -QQVGA  = 160 x 120   pixels
+  s->set_framesize(s, FRAMESIZE_SXGA);  //--> UXGA|SXGA|XGA|SVGA|VGA|CIF|QVGA|HQVGA|QQVGA
+
+  Serial.println();
+  Serial.println("Set camera ESP32 CAM successfully.");
+  //----------------------------------------
+
+  Serial.println();
+  Serial.print("ESP32-CAM captures and sends photos to the server every 20 seconds.");
+  client.setInsecure();
 }
-void captureImage() {
-  //capture image
+//________________________________________________________________________________
 
-  camera_fb_t* fb = esp_camera_fb_get();
-  if (!fb) {
-    Serial.println("Camera capture failed");
-    return;
-  }
-
-
-  // Path where new picture will be saved in SD Card
-  String timestamp = String(millis());
-  String path = "/picture_" + timestamp + ".jpg";
-
-  // fs::FS &fs = SD_MMC;
-  Serial.printf("Picture file name: %s\n", path.c_str());
-
-
-
-  File file = SPIFFS.open(path.c_str(), FILE_WRITE);
-  if (!file) {
-    Serial.println("Failed to open file in writing mode");
-  } else {
-    file.write(fb->buf, fb->len);  // payload (image), payload length
-    Serial.printf("Saved file to path: %s\n", path.c_str());
-  }
-  sendImageToServer(fb, timestamp);
-  file.close();
-  esp_camera_fb_return(fb);
-
-
-  // Turns off the ESP32-CAM white on-board LED (flash) connected to GPIO 4
-  // pinMode(4, OUTPUT);
-  // digitalWrite(4, LOW);
-  // rtc_gpio_hold_en(GPIO_NUM_4);
-  delay(2000);
-  Serial.println("Going to sleep now");
-  delay(2000);
-  esp_deep_sleep_start();
-  Serial.println("This will never be printed");
-}
-void sendImageToServer(camera_fb_t* fb, String timestamp) {
-  HTTPClient http;
-  Serial.print("[HTTP] begin...\n");
-
-  // First attempt at sending the request
-  http.begin(post_url);  // Use the initial post_url defined in your code
-  http.addHeader("Content-Type", "multipart/form-data; boundary=boundary");
-  Serial.print("[HTTP] POST...\n");
-  // Prepare the body with multipart data
-  String body = "------boundary\r\n";
-  body += "Content-Disposition: form-data; name=\"uploaded_images\"; filename=\"picture_" + timestamp + ".jpg\"\r\n";
-  body += "Content-Type: image/jpeg\r\n\r\n";
-
-  // Append the image data
-  for (size_t i = 0; i < fb->len; i++) {
-    body += (char)fb->buf[i];
-  }
-
-  body += "\r\n------boundary--\r\n";
-
-  // Send the POST request
-  int httpCode = http.POST(body);
-
-  // Handle the response
-  if (httpCode > 0) {
-    String payload = http.getString();
-    Serial.println("Server Response: " + payload);
-  } else {
-    Serial.printf("[HTTPS] POST failed, error: %s\n", http.errorToString(httpCode).c_str());
-  }
-
-
-  // End the HTTP session
-  http.end();
-}
-
-
-
+//________________________________________________________________________________ VOID LOOP()
 void loop() {
-  if (init_wifi()) {  // Connected to WiFi
-    internet_connected = true;
-    Serial.println("Internet connected");
-    captureImage();
+  // put your main code here, to run repeatedly:
+
+  //---------------------------------------- Timer/Millis to capture and send photos to server every 20 seconds (see Interval variable).
+  unsigned long currentMillis = millis();
+  if (currentMillis - previousMillis >= Interval) {
+    previousMillis = currentMillis;
+
+    sendPhotoToServer();
   }
+  //----------------------------------------
 }
-
-
-
-bool init_wifi() {
-  Serial.printf("Connecting to %s\n", ssid);
-  WiFi.begin(ssid, password);
-  for (int i = 0; i < 10; i++) {
-    if (WiFi.status() == WL_CONNECTED) return true;
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("Failed to connect to WiFi");
-  return false;
-}
+//________________________________________________________________________________
+//<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
