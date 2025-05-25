@@ -24,160 +24,18 @@
 #define VSYNC_GPIO_NUM 25
 #define HREF_GPIO_NUM 23
 #define PCLK_GPIO_NUM 22
-//========================================
 
-// LED Flash PIN (GPIO 4)
-#define FLASH_LED_PIN 4
+// int pictureNumber = 0;
 
-//======================================== Insert your network credentials.
-const char* ssid = "SSID";
-const char* password = "PASSWORD";
-//========================================
+const char* ssid = "ashwin00_fpkhr_2.4";
+const char* password = "kamehamehaah@789";
+const char* post_url = "https://dev.giriamrit.com.np/api/upload/";  // Location where images are POSTED
+bool internet_connected = false;
 
-//======================================== Variables for Timer/Millis.
-unsigned long previousMillis = 0;
-const int Interval = 20000;  //--> Photo capture every 20 seconds.
-//========================================
+#include <ArduinoOTA.h>
+#include <ESPmDNS.h>
+#include <WiFiUdp.h>
 
-// Server Address or Server IP.
-String serverName = "IP-ADRESS";  //--> Change with your server computer's IP address or your Domain name.
-// The file path "upload_img.php" on the server folder.
-String serverPath = "/api/upload/";
-// Server Port.
-const int serverPort = 443;
-
-// Variable to set capture photo with LED Flash.
-// Set to "false", then the Flash LED will not light up when capturing a photo.
-// Set to "true", then the Flash LED lights up when capturing a photo.
-bool LED_Flash_ON = true;
-
-// Initialize WiFiClient.
-WiFiClientSecure client;
-
-
-//________________________________________________________________________________ sendPhotoToServer()
-void sendPhotoToServer() {
-  client.setInsecure();
-  String AllData;
-  String DataBody;
-
-  Serial.println();
-  Serial.println("-----------");
-
-  //---------------------------------------- Pre capture for accurate timing.
-  Serial.println("Taking a photo...");
-
-  if (LED_Flash_ON == true) {
-    digitalWrite(FLASH_LED_PIN, HIGH);
-    delay(1000);
-  }
-
-  for (int i = 0; i <= 3; i++) {
-    camera_fb_t *fb = NULL;
-    fb = esp_camera_fb_get();
-    if (!fb) {
-      Serial.println("Camera capture failed");
-      Serial.println("Restarting the ESP32 CAM.");
-      delay(1000);
-      ESP.restart();
-      return;
-    }
-    
-
-    esp_camera_fb_return(fb);
-    delay(200);
-  }
-
-  camera_fb_t *fb = NULL;
-  fb = esp_camera_fb_get();
-  if (!fb) {
-    Serial.println("Camera capture failed");
-    Serial.println("Restarting the ESP32 CAM.");
-    delay(1000);
-    ESP.restart();
-    return;
-  }
-
-  if (LED_Flash_ON == true) digitalWrite(FLASH_LED_PIN, LOW);
-
-  Serial.println("Taking a photo was successful.");
-  //----------------------------------------
-
-  Serial.println("Connecting to server: " + serverName);
-
-  if (client.connect(serverName.c_str(), serverPort)) {
-    client.setInsecure();
-    String timestamp = String(millis());
-    Serial.println("Connection successful!");
-
-    String post_data = "--dataMarker\r\nContent-Disposition: form-data; name=\"uploaded_images\"; filename=\"image_" + timestamp + ".jpg\"\r\nContent-Type: image/jpeg\r\n\r\n";
-
-    String head = post_data;
-    String boundary = "\r\n--dataMarker--\r\n";
-
-    uint32_t imageLen = fb->len;
-    uint32_t dataLen = head.length() + boundary.length();
-    uint32_t totalLen = imageLen + dataLen;
-
-    client.println("POST " + serverPath + " HTTP/1.1");
-    client.println("Host: " + serverName);
-    client.println("Content-Length: " + String(totalLen));
-    client.println("Content-Type: multipart/form-data; boundary=dataMarker");
-    client.println();
-    client.print(head);
-
-    uint8_t *fbBuf = fb->buf;
-    size_t fbLen = fb->len;
-    for (size_t n = 0; n < fbLen; n = n + 1024) {
-      if (n + 1024 < fbLen) {
-        client.write(fbBuf, 1024);
-        fbBuf += 1024;
-      } else if (fbLen % 1024 > 0) {
-        size_t remainder = fbLen % 1024;
-        client.write(fbBuf, remainder);
-      }
-    }
-    client.print(boundary);
-
-    esp_camera_fb_return(fb);
-
-    int timoutTimer = 10000;
-    long startTimer = millis();
-    boolean state = false;
-    Serial.println("Response : ");
-    while ((startTimer + timoutTimer) > millis()) {
-      Serial.print(".");
-      delay(200);
-
-      // Skip HTTP headers
-      while (client.available()) {
-        char c = client.read();
-        if (c == '\n') {
-          if (AllData.length() == 0) { state = true; }
-          AllData = "";
-        } else if (c != '\r') {
-          AllData += String(c);
-        }
-        if (state == true) { DataBody += String(c); }
-        startTimer = millis();
-      }
-      if (DataBody.length() > 0) { break; }
-    }
-    client.stop();
-    Serial.println(DataBody);
-    Serial.println("-----------");
-    Serial.println();
-
-  } else {
-    client.stop();
-    DataBody = "Connection to " + serverName + " failed.";
-    Serial.println(DataBody);
-    Serial.println("-----------");
-  }
-}
-//________________________________________________________________________________
-
-//________________________________________________________________________________ VOID SETUP()
 void setup() {
   // put your setup code here, to run once:
 
