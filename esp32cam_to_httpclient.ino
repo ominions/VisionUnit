@@ -36,9 +36,9 @@
 
 // int pictureNumber = 0;
 
-const char* ssid = "ashwin00_fpkhr_2.4";
-const char* password = "kamehamehaah@789";
-const char* post_url = "https://dev.giriamrit.com.np/api/upload/";  // Location where images are POSTED
+const char* ssid = "ssid";
+const char* password = "password";
+const char* post_url = "https://your_deployed_url/api/upload/";  // Location where images are POSTED
 bool internet_connected = false;
 
 #include <ArduinoOTA.h>
