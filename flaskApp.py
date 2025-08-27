@@ -65,7 +65,7 @@ def fetch_images():
     global current_batch_name, current_batch_path, saved_images_info
 
     try:
-        response = requests.get('https://backend.giriamrit.com.np/api/images/')
+        response = requests.get('<backend_url>')
         if response.status_code != 200:
             print(f"[{last_batch_name}] Failed to fetch: {response.status_code}")
             return
